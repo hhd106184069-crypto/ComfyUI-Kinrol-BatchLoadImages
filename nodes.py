@@ -9,7 +9,7 @@ import torch
 import hashlib
 import time
 
-# ========== 批量加载节点（合并 GitHub 新功能 + 掉线修复） ==========
+# ========== 批量加载节点（thumb_size 改为 STRING，避免框架强制转换报错） ==========
 class KinrolBatchLoadImages:
     """批量加载图片节点，支持逐张入队、选择图片、追加图片、选择文件夹、清空列表等功能。"""
 
@@ -22,7 +22,8 @@ class KinrolBatchLoadImages:
                 "mode": (["batch", "single"], {"default": "batch"}),
                 "index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
                 "max_rows": ("INT", {"default": 5, "min": 1, "max": 20, "step": 1}),
-                "thumb_size": ("INT", {"default": 120, "min": 80, "max": 300, "step": 1}),
+                # 关键修改：类型改为 STRING，避免框架因为空字符串报 int 转换错误
+                "thumb_size": ("STRING", {"default": "120"}),
             }
         }
 
@@ -31,7 +32,16 @@ class KinrolBatchLoadImages:
     RETURN_NAMES = ("images", "filenames")
     FUNCTION = "load_images"
 
-    def load_images(self, image_list: str, max_images: int, mode: str, index: int, max_rows: int, thumb_size: int):
+    # 辅助函数：安全转换为整数
+    def _safe_int(self, value, default=120):
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return default
+
+    def load_images(self, image_list: str, max_images: int, mode: str, index: int, max_rows: int, thumb_size: str):
+        thumb_size_int = self._safe_int(thumb_size, 120)
+
         names = [x.strip() for x in (image_list or "").splitlines()]
         names = [x for x in names if x]
         if max_images > 0:
@@ -47,7 +57,7 @@ class KinrolBatchLoadImages:
         output_images, output_names = [], []
         excluded_formats = ["MPO"]
         start_time = time.time()
-        max_duration = 30  # 最长处理30秒，防止卡死
+        max_duration = 30
         for name in names:
             if time.time() - start_time > max_duration:
                 print("KinrolBatchLoadImages: 加载超时，已跳过剩余图片")
@@ -80,6 +90,12 @@ class KinrolBatchLoadImages:
 
     @classmethod
     def IS_CHANGED(s, image_list, max_images, mode, index, max_rows, thumb_size):
+        # 安全转换
+        try:
+            thumb_size_int = int(thumb_size)
+        except (ValueError, TypeError):
+            thumb_size_int = 120
+
         m = hashlib.sha256()
         names = [x.strip() for x in (image_list or "").splitlines()]
         names = [x for x in names if x]
@@ -89,7 +105,7 @@ class KinrolBatchLoadImages:
             if index >= len(names): index = len(names) - 1
             names = names[:1] if names else [names[index]]
         if not names: return m.digest().hex()
-        m.update(mode.encode()); m.update(str(index).encode()); m.update(str(max_images).encode()); m.update(str(max_rows).encode()); m.update(str(thumb_size).encode())
+        m.update(mode.encode()); m.update(str(index).encode()); m.update(str(max_images).encode()); m.update(str(max_rows).encode()); m.update(str(thumb_size_int).encode())
         for name in names:
             m.update(name.encode())
             if folder_paths.exists_annotated_filepath(name):
@@ -113,10 +129,8 @@ class KinrolBatchLoadImages:
         return True
 
 
-# ========== 文本顺序保存节点（前置文字、图片同步、绝对/相对路径） ==========
+# ========== 文本顺序保存节点 ==========
 class KinrolSaveTextSequential:
-    """按顺序保存文本文件，用于打标；可同时保存关联图片，统一命名。"""
-
     ENCODINGS = ["UTF-8", "UTF-8-BOM", "GBK", "GB2312", "ASCII"]
 
     @classmethod
@@ -133,6 +147,7 @@ class KinrolSaveTextSequential:
             },
             "optional": {
                 "image": ("IMAGE", {"default": None}),
+                "base_filename": ("STRING", {"default": ""}),
             }
         }
 
@@ -142,7 +157,7 @@ class KinrolSaveTextSequential:
     CATEGORY = "Kinrol/Text"
     OUTPUT_NODE = True
 
-    def save_text(self, text, prefix, file_extension, encoding, subfolder, prepend_text, save_image_with_text, image=None):
+    def save_text(self, text, prefix, file_extension, encoding, subfolder, prepend_text, save_image_with_text, image=None, base_filename=""):
         ext = file_extension.strip().lstrip(".")
         if not ext: ext = "txt"
 
@@ -154,36 +169,35 @@ class KinrolSaveTextSequential:
             output_dir = output_root / sub_path
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # 查找最大序号
-        pattern = re.compile(rf"^{re.escape(prefix)}_(\d+)\.{re.escape(ext)}$")
-        max_num = 0
-        if output_dir.exists():
-            for f in output_dir.iterdir():
-                if f.is_file():
-                    m = pattern.match(f.name)
-                    if m:
-                        num = int(m.group(1))
-                        if num > max_num:
-                            max_num = num
+        if base_filename and base_filename.strip():
+            base = Path(base_filename.strip()).stem
+            filename = f"{base}.{ext}"
+        else:
+            pattern = re.compile(rf"^{re.escape(prefix)}_(\d+)\.{re.escape(ext)}$")
+            max_num = 0
+            if output_dir.exists():
+                for f in output_dir.iterdir():
+                    if f.is_file():
+                        m = pattern.match(f.name)
+                        if m:
+                            num = int(m.group(1))
+                            if num > max_num:
+                                max_num = num
+            next_num = max_num + 1
+            num_str = f"{next_num:02d}" if next_num <= 99 else str(next_num)
+            filename = f"{prefix}_{num_str}.{ext}"
 
-        next_num = max_num + 1
-        num_str = f"{next_num:02d}" if next_num <= 99 else str(next_num)
-
-        # 合并前置文字与正文
         full_text = (prepend_text or "") + text
-
-        filename = f"{prefix}_{num_str}.{ext}"
         filepath = output_dir / filename
         with open(filepath, "w", encoding=encoding) as f:
             f.write(full_text)
 
-        # 保存图片（如果开关打开且有图片输入）
         saved_image = image
         if save_image_with_text and image is not None:
             from torchvision.transforms.functional import to_pil_image
             img_tensor = image[0].cpu()
             pil_img = to_pil_image(img_tensor.permute(2, 0, 1))
-            img_filename = f"{prefix}_{num_str}.png"
+            img_filename = f"{Path(filename).stem}.png"
             img_path = output_dir / img_filename
             pil_img.save(img_path, "PNG")
 

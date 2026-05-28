@@ -14,7 +14,6 @@ function setImageList(node, names) {
     w.callback?.(w.value);
 }
 function getViewUrl(filename) {
-    // 使用缩略图宽度参数，减轻网络压力
     return `/view?filename=${encodeURIComponent(filename)}&type=input&subfolder=&width=150`;
 }
 
@@ -138,21 +137,19 @@ function createBatchLoadUI(node) {
     container.tabIndex = 0;
     container.style.cssText = `width:100%; padding:8px; background:var(--comfy-menu-bg); border:1px solid var(--border-color); border-radius:6px; margin:5px 0; pointer-events:auto; display:flex; flex-direction:column; outline:none;`;
 
-    // 获取 thumb_size 小部件的当前值
     const thumbSizeWidget = getThumbSizeWidget(node);
-    let currentThumbSize = thumbSizeWidget ? thumbSizeWidget.value : 120;
+    // 安全获取初始值，防止空字符串
+    let currentThumbSize = thumbSizeWidget ? (parseInt(thumbSizeWidget.value) || 120) : 120;
 
-    // ===== 两行按钮布局 =====
+    // 按钮布局
     const btnGrid = document.createElement("div");
     btnGrid.style.cssText = "display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; margin-bottom:8px;";
-
     const mkBtn = (label) => {
         const b = document.createElement("button");
         b.textContent = label;
         b.style.cssText = "padding:6px 4px; background:var(--comfy-input-bg); color:var(--input-text); border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:12px; white-space:nowrap;";
         return b;
     };
-
     const replaceBtn = mkBtn("选择图片");
     const addBtn = mkBtn("追加图片");
     const folderBtn = mkBtn("选择文件夹");
@@ -165,7 +162,6 @@ function createBatchLoadUI(node) {
     const clearBtn = mkBtn("清空");
     const moveUpBtn = mkBtn("↑");
     const moveDownBtn = mkBtn("↓");
-
     btnGrid.append(replaceBtn, addBtn, folderBtn, queueAllBtn);
     btnGrid.append(queueSelectedBtn, deleteSelectedBtn, selectAllBtn, invertSelBtn);
     btnGrid.append(deselectBtn, clearBtn, moveUpBtn, moveDownBtn);
@@ -174,8 +170,7 @@ function createBatchLoadUI(node) {
     const searchRow = document.createElement("div");
     searchRow.style.cssText = "display:flex; gap:6px; margin-bottom:8px; align-items:center;";
     const searchInput = document.createElement("input");
-    searchInput.type = "text";
-    searchInput.placeholder = "搜索文件名...";
+    searchInput.type = "text"; searchInput.placeholder = "搜索文件名...";
     searchInput.style.cssText = "flex:1; padding:4px 8px; background:var(--comfy-input-bg); color:var(--input-text); border:1px solid var(--border-color); border-radius:4px; font-size:12px;";
     const searchClear = document.createElement("button");
     searchClear.textContent = "✕";
@@ -183,7 +178,7 @@ function createBatchLoadUI(node) {
     searchRow.append(searchInput, searchClear);
 
     const brand = document.createElement("div");
-    brand.textContent = "Kinrol Batch Load Images | Ctrl+C/V | Del | ↑↓ | Shift+点击范围选择";
+    brand.textContent = "Kinrol Batch Load Images | Ctrl+C/V 粘贴(含文件) | Del 删除 | ↑↓ | Shift+点击范围选择";
     brand.style.cssText = "font-size:10px; opacity:0.7; margin-bottom:8px; text-align:center; color:var(--input-text); flex-shrink:0;";
 
     const statusBar = document.createElement("div");
@@ -195,7 +190,6 @@ function createBatchLoadUI(node) {
     const info = document.createElement("div");
     info.style.cssText = "font-size:12px; opacity:0.85; flex:1;";
 
-    // 行数控件
     const rowControl = document.createElement("div");
     rowControl.style.cssText = "display:flex; align-items:center; gap:4px; font-size:12px;";
     const rowLabel = document.createElement("span"); rowLabel.textContent = "行数:";
@@ -204,7 +198,6 @@ function createBatchLoadUI(node) {
     rowInput.style.cssText = "width:45px; background:var(--comfy-input-bg); color:var(--input-text); border:1px solid var(--border-color); border-radius:4px; padding:2px 4px; font-size:12px;";
     rowControl.append(rowLabel, rowInput);
 
-    // 缩略图大小滑块（通过 thumb_size widget 同步）
     const sizeControl = document.createElement("div");
     sizeControl.style.cssText = "display:flex; align-items:center; gap:4px; font-size:12px;";
     const sizeLabel = document.createElement("span");
@@ -228,15 +221,16 @@ function createBatchLoadUI(node) {
     let searchTerm = "";
     let alignHeight = false;
     let redrawTimeout = null;
-    let lastShiftSelectedIndex = -1; // 用于Shift+点击范围选择
+    let lastShiftSelectedIndex = -1;
 
-    // 同步滑块值到 thumb_size widget
+    // 安全同步 thumb_size 值到 hidden widget
     const syncThumbSize = (val) => {
+        const numVal = parseInt(val) || 120;
         if (thumbSizeWidget) {
-            thumbSizeWidget.value = val;
-            thumbSizeWidget.callback?.(val);
+            thumbSizeWidget.value = numVal;
+            thumbSizeWidget.callback?.(numVal);
         }
-        currentThumbSize = val;
+        currentThumbSize = numVal;
     };
 
     const applyLayoutMode = () => {
@@ -365,23 +359,37 @@ function createBatchLoadUI(node) {
         }
     });
 
-    // 全局粘贴拦截（仅当焦点在插件内）
+    // 全局粘贴拦截（支持粘贴文件，仅当焦点在插件内）
     const handleGlobalPaste = async (e) => {
         if (!container.contains(document.activeElement)) return;
         const items = e.clipboardData?.items;
-        if (!items) return;
-        let hasImage = false;
-        const files = [];
-        for (const item of items) {
-            if (item.type.startsWith("image/")) {
-                const blob = item.getAsFile();
-                if (blob) { files.push(blob); hasImage = true; }
+        if (items) {
+            const files = [];
+            for (const item of items) {
+                if (item.kind === "file" && item.type.startsWith("image/")) {
+                    const file = item.getAsFile();
+                    if (file) files.push(file);
+                }
             }
-        }
-        if (hasImage) {
-            e.preventDefault();
-            await uploadFilesSequential(node, files, { replace: false });
-            setStatus("已粘贴剪贴板图片");
+            if (files.length > 0) {
+                e.preventDefault();
+                await uploadFilesSequential(node, files, { replace: false });
+                setStatus(`已粘贴 ${files.length} 个文件`);
+                return;
+            }
+            let hasImage = false;
+            const imageBlobs = [];
+            for (const item of items) {
+                if (item.type.startsWith("image/")) {
+                    const blob = item.getAsFile();
+                    if (blob) { imageBlobs.push(blob); hasImage = true; }
+                }
+            }
+            if (hasImage) {
+                e.preventDefault();
+                await uploadFilesSequential(node, imageBlobs, { replace: false });
+                setStatus("已粘贴剪贴板图片");
+            }
         }
     };
     document.addEventListener("paste", handleGlobalPaste);
@@ -421,7 +429,6 @@ function createBatchLoadUI(node) {
         document.removeEventListener("mousemove", onMouseMove);
         document.removeEventListener("mouseup", onMouseUp);
 
-        // 框选结束
         if (isSelecting && selectionRect) {
             const rect = selectionRect.getBoundingClientRect();
             const cells = grid.querySelectorAll(".kinrol-thumb-cell");
@@ -442,31 +449,23 @@ function createBatchLoadUI(node) {
             selectionRect.remove();
             selectionRect = null;
         } else if (!isSelecting) {
-            // 单击或Shift+单击
             const cell = e.target.closest(".kinrol-thumb-cell");
             if (cell) {
                 const filename = cell.dataset.filename;
                 const cellIndex = parseInt(cell.dataset.index, 10);
-
                 if (e.shiftKey && lastShiftSelectedIndex >= 0) {
-                    // Shift+单击范围选择
                     const names = parseImageList(getImageListWidget(node)?.value);
                     const startIdx = Math.min(lastShiftSelectedIndex, cellIndex);
                     const endIdx = Math.max(lastShiftSelectedIndex, cellIndex);
-                    // 清除现有选中（可改为添加模式，这里根据需求可调）
-                    // 默认范围选中替换
                     selectedFiles.clear();
                     for (let i = startIdx; i <= endIdx; i++) {
                         if (i < names.length) selectedFiles.add(names[i]);
                     }
                 } else {
-                    // 普通单击切换
                     if (selectedFiles.has(filename)) selectedFiles.delete(filename);
                     else selectedFiles.add(filename);
-                    lastShiftSelectedIndex = cellIndex; // 记录最后点击的索引
+                    lastShiftSelectedIndex = cellIndex;
                 }
-
-                // 更新所有单元格的选中样式
                 grid.querySelectorAll(".kinrol-thumb-cell").forEach(c => updateElementSelection(c, c.dataset.filename));
                 updateInfo();
             }
@@ -493,7 +492,6 @@ function createBatchLoadUI(node) {
         isSelecting = false;
     });
 
-    // 搜索事件
     searchInput.addEventListener("input", () => {
         searchTerm = searchInput.value.toLowerCase().trim();
         redraw();
@@ -504,7 +502,6 @@ function createBatchLoadUI(node) {
         redraw();
     };
 
-    // 全选
     selectAllBtn.onclick = () => {
         const names = parseImageList(getImageListWidget(node)?.value);
         names.forEach(n => selectedFiles.add(n));
@@ -512,27 +509,19 @@ function createBatchLoadUI(node) {
         updateInfo();
         setStatus("已全选");
     };
-
-    // 反选
     invertSelBtn.onclick = () => {
         const names = parseImageList(getImageListWidget(node)?.value);
         const newSet = new Set();
-        names.forEach(n => {
-            if (!selectedFiles.has(n)) newSet.add(n);
-        });
+        names.forEach(n => { if (!selectedFiles.has(n)) newSet.add(n); });
         selectedFiles = newSet;
         grid.querySelectorAll(".kinrol-thumb-cell").forEach(c => updateElementSelection(c, c.dataset.filename));
         updateInfo();
         setStatus("已反选");
     };
-
-    // 取消选中
     deselectBtn.onclick = () => {
         clearSelection();
         setStatus("已取消选中");
     };
-
-    // 批量移动
     moveUpBtn.onclick = () => {
         const names = parseImageList(getImageListWidget(node)?.value);
         if (selectedFiles.size === 0) { setStatus("请先选中要移动的图片"); return; }
@@ -546,7 +535,6 @@ function createBatchLoadUI(node) {
         setImageList(node, names);
         setStatus("已向前移动选中图片");
     };
-
     moveDownBtn.onclick = () => {
         const names = parseImageList(getImageListWidget(node)?.value);
         if (selectedFiles.size === 0) { setStatus("请先选中要移动的图片"); return; }
@@ -560,15 +548,12 @@ function createBatchLoadUI(node) {
         setImageList(node, names);
         setStatus("已向后移动选中图片");
     };
-
-    // 清空
     clearBtn.onclick = () => {
         selectedFiles.clear();
         setImageList(node, []);
         setStatus("已清空所有图片");
     };
 
-    // ===== 防抖重绘 =====
     const redraw = () => {
         if (redrawTimeout) clearTimeout(redrawTimeout);
         redrawTimeout = setTimeout(() => _redraw(), 300);
@@ -702,7 +687,6 @@ function createBatchLoadUI(node) {
     style.textContent = `.kinrol-thumb-cell.kinrol-selected > div:first-child { border-color: #4a6 !important; box-shadow: 0 0 0 1px #4a6; }`;
     container.appendChild(style);
 
-    // 初始化布局
     applyLayoutMode();
     setTimeout(() => redraw(), 50);
 
@@ -719,7 +703,6 @@ app.registerExtension({
             nodeType.prototype.onNodeCreated = function () {
                 const r = origOnNodeCreated?.apply(this, arguments);
 
-                // 隐藏 thumb_size widget
                 const thumbSizeWidget = getThumbSizeWidget(this);
                 if (thumbSizeWidget) {
                     thumbSizeWidget.type = "hidden";
@@ -760,6 +743,5 @@ app.registerExtension({
                 return r;
             };
         }
-        // KinrolSaveTextSequential 无自定义 UI
     },
 });
