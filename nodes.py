@@ -29,6 +29,8 @@ class KinrolBatchLoadImages:
                 "index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
                 # 新增：控制前端预览网格的最大行数
                 "max_rows": ("INT", {"default": 5, "min": 1, "max": 20, "step": 1}),
+                # 前端缩略图尺寸持久化字段，由自定义 UI 读写
+                "thumb_size": ("INT", {"default": 120, "min": 40, "max": 300, "step": 1}),
             }
         }
 
@@ -37,7 +39,7 @@ class KinrolBatchLoadImages:
     RETURN_NAMES = ("images", "filenames")
     FUNCTION = "load_images"
 
-    def load_images(self, image_list: str, max_images: int, mode: str, index: int, max_rows: int):
+    def load_images(self, image_list: str, max_images: int, mode: str, index: int, max_rows: int, thumb_size: int):
         """
         加载图片列表中的图片。
         - mode="batch": 加载所有图片并作为批次返回。
@@ -105,7 +107,7 @@ class KinrolBatchLoadImages:
         return (output_image, "\n".join(output_names))
 
     @classmethod
-    def IS_CHANGED(s, image_list: str, max_images: int, mode: str, index: int, max_rows: int):
+    def IS_CHANGED(s, image_list: str, max_images: int, mode: str, index: int, max_rows: int, thumb_size: int):
         m = hashlib.sha256()
         names = [x.strip() for x in (image_list or "").splitlines()]
         names = [x for x in names if x]
@@ -127,6 +129,7 @@ class KinrolBatchLoadImages:
         m.update(str(index).encode("utf-8"))
         m.update(str(max_images).encode("utf-8"))
         m.update(str(max_rows).encode("utf-8"))  # 纳入哈希计算
+        m.update(str(thumb_size).encode("utf-8"))
         for name in names:
             m.update(name.encode("utf-8"))
             if folder_paths.exists_annotated_filepath(name):
@@ -137,7 +140,7 @@ class KinrolBatchLoadImages:
         return m.digest().hex()
 
     @classmethod
-    def VALIDATE_INPUTS(s, image_list: str, max_images: int, mode: str, index: int, max_rows: int):
+    def VALIDATE_INPUTS(s, image_list: str, max_images: int, mode: str, index: int, max_rows: int, thumb_size: int):
         names = [x.strip() for x in (image_list or "").splitlines()]
         names = [x for x in names if x]
 
