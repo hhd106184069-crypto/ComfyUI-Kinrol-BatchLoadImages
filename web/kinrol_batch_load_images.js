@@ -10,6 +10,9 @@ function getImageListWidget(node) {
 function getMaxRowsWidget(node) {
     return node?.widgets?.find((w) => w.name === "max_rows");
 }
+function getThumbSizeWidget(node) {
+    return node?.widgets?.find((w) => w.name === "thumb_size");
+}
 function parseImageList(value) {
     return (value || "").split(/[\n,;]+/).map(s => s.trim()).filter(s => s.length > 0);
 }
@@ -144,6 +147,7 @@ async function queueAllSequential(node) {
 // ===================== UI 构建 =====================
 function createBrowserUI(node) {
     let selectedFiles = new Set();
+    let lastSelectedIndex = null;
 
     const container = document.createElement("div");
     container.style.cssText = `
@@ -158,24 +162,34 @@ function createBrowserUI(node) {
         flex-direction: column;
     `;
 
-    // 按钮行
-    const btnRow = document.createElement("div");
-    btnRow.style.cssText = "display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap;";
+    const buttonPanel = document.createElement("div");
+    buttonPanel.style.cssText = "display:flex; flex-direction:column; gap:4px; margin-bottom:6px;";
     const mkBtn = label => {
         const b = document.createElement("button");
         b.textContent = label;
-        b.style.cssText = "flex:1; min-width:56px; padding:6px 4px; background:var(--comfy-input-bg); color:var(--input-text); border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:12px; white-space:nowrap;";
+        b.style.cssText = "min-height:26px; padding:4px 6px; background:var(--comfy-input-bg); color:var(--input-text); border:1px solid var(--border-color); border-radius:4px; cursor:pointer; font-size:11px; line-height:1.1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;";
         return b;
+    };
+    const mkRow = (...buttons) => {
+        const row = document.createElement("div");
+        row.style.cssText = "display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:4px;";
+        row.append(...buttons);
+        return row;
     };
     const replaceBtn = mkBtn("选择图片");
     const addBtn = mkBtn("追加图片");
     const folderBtn = mkBtn("选择文件夹");
     const queueAllBtn = mkBtn("逐张入队");
     const queueSelectedBtn = mkBtn("入队选中");
-    const deleteSelectedBtn = mkBtn("删除选中");
+    const toggleAllBtn = mkBtn("全选");
+    const invertBtn = mkBtn("反选");
     const deselectBtn = mkBtn("取消选中");
+    const deleteSelectedBtn = mkBtn("删除选中");
     const clearBtn = mkBtn("清空");
-    btnRow.append(replaceBtn, addBtn, folderBtn, queueAllBtn, queueSelectedBtn, deleteSelectedBtn, deselectBtn, clearBtn);
+    buttonPanel.append(
+        mkRow(replaceBtn, addBtn, folderBtn, queueAllBtn, queueSelectedBtn),
+        mkRow(toggleAllBtn, invertBtn, deselectBtn, deleteSelectedBtn, clearBtn),
+    );
 
     // 品牌
     const brand = document.createElement("div");
@@ -205,7 +219,7 @@ function createBrowserUI(node) {
     sizeControl.style.cssText = "display:flex; align-items:center; gap:4px; font-size:12px;";
     const sizeLabel = document.createElement("span");
     const sizeSlider = document.createElement("input");
-    sizeSlider.type = "range"; sizeSlider.min = 80; sizeSlider.max = 300; sizeSlider.value = 120;
+    sizeSlider.type = "range"; sizeSlider.min = 40; sizeSlider.max = 300; sizeSlider.value = 120;
     sizeSlider.style.cssText = "width:70px;";
     const sizeValue = document.createElement("span");
     sizeValue.style.cssText = "min-width:40px; text-align:right;";
@@ -233,8 +247,28 @@ function createBrowserUI(node) {
 
     // 模式状态
     let alignHeight = false;
+    const clampThumbSize = (value) => {
+        const parsed = parseInt(value, 10);
+        if (Number.isNaN(parsed)) return 120;
+        return Math.min(300, Math.max(40, parsed));
+    };
+    const getThumbSize = () => clampThumbSize(getThumbSizeWidget(node)?.value ?? sizeSlider.value);
+    const setThumbSize = (value, { persist = true } = {}) => {
+        const normalized = clampThumbSize(value);
+        sizeSlider.value = String(normalized);
+        sizeValue.textContent = normalized + "px";
+        if (persist) {
+            const widget = getThumbSizeWidget(node);
+            if (widget && widget.value !== normalized) {
+                widget.value = normalized;
+                widget.callback?.(normalized);
+            }
+        }
+        return normalized;
+    };
     const applyLayoutMode = () => {
         const names = parseImageList(getImageListWidget(node)?.value);
+        const thumbSize = setThumbSize(getThumbSize(), { persist: false });
         if (alignHeight) {
             grid.style.display = names.length ? 'flex' : 'none';
             grid.style.flexWrap = 'wrap';
@@ -243,21 +277,21 @@ function createBrowserUI(node) {
             toggleModeBtn.textContent = "宽度优先";
         } else {
             grid.style.display = names.length ? 'grid' : 'none';
-            grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${sizeSlider.value}px, 1fr))`;
+            grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${thumbSize}px, 1fr))`;
             grid.style.flexWrap = '';
             sizeLabel.textContent = "大小:";
             toggleModeBtn.textContent = "高度优先";
         }
-        sizeValue.textContent = sizeSlider.value + "px";
         updateGridMaxHeight();
     };
     toggleModeBtn.onclick = () => { alignHeight = !alignHeight; applyLayoutMode(); redraw(); };
-    sizeSlider.addEventListener("input", () => { sizeValue.textContent = sizeSlider.value + "px"; applyLayoutMode(); redraw(); });
+    sizeSlider.addEventListener("input", () => { setThumbSize(sizeSlider.value); applyLayoutMode(); redraw(); });
 
     const updateInfo = () => {
         const names = parseImageList(getImageListWidget(node)?.value);
         const selectedCount = selectedFiles.size;
         info.textContent = names.length ? `已选择 ${names.length} 张${selectedCount > 0 ? ` (选中 ${selectedCount})` : ""}` : "暂无图片";
+        toggleAllBtn.textContent = names.length > 0 && selectedCount === names.length ? "全不选" : "全选";
     };
     const getMaxRows = () => getMaxRowsWidget(node)?.value || 5;
     const setMaxRows = val => {
@@ -266,7 +300,7 @@ function createBrowserUI(node) {
     };
 
     const getEstimatedRowHeight = () => {
-        const thumbVal = parseInt(sizeSlider.value, 10);
+        const thumbVal = clampThumbSize(sizeSlider.value);
         const labelHeight = 30;
         if (alignHeight) return thumbVal + labelHeight + 3 + 12;
         return thumbVal * 2 + labelHeight + 3 + 12;
@@ -280,7 +314,7 @@ function createBrowserUI(node) {
         const baseHeight = maxRows * estimatedRow;
         const containerHeight = container.clientHeight;
         if (!containerHeight) return;
-        const fixedHeight = btnRow.offsetHeight + brand.offsetHeight + statusBar.offsetHeight + infoRow.offsetHeight + 16;
+        const fixedHeight = buttonPanel.offsetHeight + brand.offsetHeight + statusBar.offsetHeight + infoRow.offsetHeight + 16;
         let availableHeight = containerHeight - fixedHeight;
         if (availableHeight < 100) availableHeight = 100;
         const targetHeight = Math.min(baseHeight, availableHeight);
@@ -292,12 +326,71 @@ function createBrowserUI(node) {
 
     const clearSelection = () => {
         selectedFiles.clear();
+        lastSelectedIndex = null;
         grid.querySelectorAll(".kinrol-selected").forEach(el => el.classList.remove("kinrol-selected"));
         updateInfo();
     };
     const updateElementSelection = (el, filename) => {
         if (selectedFiles.has(filename)) el.classList.add("kinrol-selected");
         else el.classList.remove("kinrol-selected");
+    };
+    const syncSelectionToVisibleCells = () => {
+        grid.querySelectorAll(".kinrol-thumb-cell").forEach(cell => updateElementSelection(cell, cell.dataset.filename));
+        updateInfo();
+    };
+    const toggleAllSelection = () => {
+        const names = parseImageList(getImageListWidget(node)?.value);
+        if (names.length === 0) {
+            updateInfo();
+            return;
+        }
+        const shouldClear = selectedFiles.size === names.length;
+        if (shouldClear) {
+            clearSelection();
+            return;
+        }
+        selectedFiles = new Set(names);
+        lastSelectedIndex = names.length - 1;
+        syncSelectionToVisibleCells();
+    };
+    const invertSelection = () => {
+        const names = parseImageList(getImageListWidget(node)?.value);
+        if (names.length === 0) {
+            updateInfo();
+            return;
+        }
+        const nextSelected = new Set();
+        names.forEach((name, index) => {
+            if (!selectedFiles.has(name)) nextSelected.add(name);
+            if (nextSelected.has(name)) lastSelectedIndex = index;
+        });
+        selectedFiles = nextSelected;
+        if (selectedFiles.size === 0) lastSelectedIndex = null;
+        syncSelectionToVisibleCells();
+    };
+    const handleCellClick = (cell, event) => {
+        const names = parseImageList(getImageListWidget(node)?.value);
+        const filename = cell?.dataset?.filename;
+        if (!filename) return;
+        const clickedIndex = names.indexOf(filename);
+        if (clickedIndex === -1) return;
+
+        if (event?.shiftKey && lastSelectedIndex !== null && lastSelectedIndex >= 0 && lastSelectedIndex < names.length) {
+            const start = Math.min(lastSelectedIndex, clickedIndex);
+            const end = Math.max(lastSelectedIndex, clickedIndex);
+            for (let i = start; i <= end; i++) {
+                selectedFiles.add(names[i]);
+            }
+            lastSelectedIndex = clickedIndex;
+            syncSelectionToVisibleCells();
+            return;
+        }
+
+        if (selectedFiles.has(filename)) selectedFiles.delete(filename);
+        else selectedFiles.add(filename);
+        lastSelectedIndex = clickedIndex;
+        updateElementSelection(cell, filename);
+        updateInfo();
     };
 
     // ===== 框选逻辑（临时监听，防冲突） =====
@@ -350,13 +443,7 @@ function createBrowserUI(node) {
             selectionRect = null;
         } else if (!isSelecting) {
             const cell = e.target.closest(".kinrol-thumb-cell");
-            if (cell) {
-                const filename = cell.dataset.filename;
-                if (selectedFiles.has(filename)) selectedFiles.delete(filename);
-                else selectedFiles.add(filename);
-                updateElementSelection(cell, filename);
-                updateInfo();
-            }
+            if (cell) handleCellClick(cell, e);
         }
         isSelecting = false;
     };
@@ -384,13 +471,18 @@ function createBrowserUI(node) {
     // ===== 重绘 =====
     const redraw = () => {
         const names = parseImageList(getImageListWidget(node)?.value);
+        selectedFiles = new Set(names.filter(name => selectedFiles.has(name)));
+        if (lastSelectedIndex !== null && (lastSelectedIndex < 0 || lastSelectedIndex >= names.length)) {
+            lastSelectedIndex = names.length ? names.length - 1 : null;
+        }
         grid.innerHTML = "";
         if (names.length === 0) {
             grid.style.display = "none";
-            selectedFiles.clear();
+            clearSelection();
             updateInfo();
             return;
         }
+        setThumbSize(getThumbSize(), { persist: false });
         if (alignHeight) {
             grid.style.display = "flex";
             grid.style.flexWrap = "wrap";
@@ -446,6 +538,7 @@ function createBrowserUI(node) {
                 e.preventDefault(); e.stopPropagation();
                 const next = names.slice(0, idx).concat(names.slice(idx + 1));
                 selectedFiles.delete(name);
+                if (selectedFiles.size === 0) lastSelectedIndex = null;
                 setImageList(node, next);
             };
 
@@ -464,6 +557,7 @@ function createBrowserUI(node) {
     const setStatus = (text) => { statusBar.textContent = text || ""; };
 
     rowInput.value = getMaxRows();
+    setThumbSize(getThumbSize(), { persist: false });
     rowInput.addEventListener("change", () => {
         let val = parseInt(rowInput.value, 10);
         if (isNaN(val)) val = 5;
@@ -488,6 +582,8 @@ function createBrowserUI(node) {
     addBtn.onclick = () => openMultiSelect(node, { replace: false });
     folderBtn.onclick = () => openFolderSelect(node, { replace: true });
     queueAllBtn.onclick = () => queueAllSequential(node);
+    toggleAllBtn.onclick = () => toggleAllSelection();
+    invertBtn.onclick = () => invertSelection();
     queueSelectedBtn.onclick = async () => {
         const names = parseImageList(getImageListWidget(node)?.value);
         const toQueue = names.filter(n => selectedFiles.has(n));
@@ -506,13 +602,13 @@ function createBrowserUI(node) {
         if (selectedFiles.size === 0) { alert("请先选中要删除的图片"); return; }
         const names = parseImageList(getImageListWidget(node)?.value);
         const remaining = names.filter(n => !selectedFiles.has(n));
-        selectedFiles.clear();
+        clearSelection();
         setImageList(node, remaining);
     };
     deselectBtn.onclick = () => clearSelection();
-    clearBtn.onclick = () => { selectedFiles.clear(); setImageList(node, []); };
+    clearBtn.onclick = () => { clearSelection(); setImageList(node, []); };
 
-    container.append(btnRow, brand, statusBar, infoRow, grid);
+    container.append(buttonPanel, brand, statusBar, infoRow, grid);
     const style = document.createElement("style");
     style.textContent = `.kinrol-thumb-cell.kinrol-selected > div:first-child { border-color: #4a6 !important; box-shadow: 0 0 0 1px #4a6; }`;
     container.appendChild(style);
@@ -546,6 +642,11 @@ app.registerExtension({
             if (maxRowsWidget) {
                 maxRowsWidget.type = "hidden";
                 maxRowsWidget.computeSize = () => [0, -4];
+            }
+            const thumbSizeWidget = getThumbSizeWidget(this);
+            if (thumbSizeWidget) {
+                thumbSizeWidget.type = "hidden";
+                thumbSizeWidget.computeSize = () => [0, -4];
             }
             const ui = createBrowserUI(this);
             this._kinrolBatchLoadImagesUI = ui;
