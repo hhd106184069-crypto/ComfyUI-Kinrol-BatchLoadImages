@@ -138,7 +138,7 @@ function createBatchLoadUI(node) {
     container.style.cssText = `width:100%; padding:8px; background:var(--comfy-menu-bg); border:1px solid var(--border-color); border-radius:6px; margin:5px 0; pointer-events:auto; display:flex; flex-direction:column; outline:none;`;
 
     const thumbSizeWidget = getThumbSizeWidget(node);
-    // 安全获取初始值，防止空字符串
+    // 安全获取初始值（thumb_size 现在是字符串类型，需要转换）
     let currentThumbSize = thumbSizeWidget ? (parseInt(thumbSizeWidget.value) || 120) : 120;
 
     // 按钮布局
@@ -223,10 +223,10 @@ function createBatchLoadUI(node) {
     let redrawTimeout = null;
     let lastShiftSelectedIndex = -1;
 
-    // 安全同步 thumb_size 值到 hidden widget
     const syncThumbSize = (val) => {
         const numVal = parseInt(val) || 120;
         if (thumbSizeWidget) {
+            // 因为 thumb_size 在后端是 STRING，前端直接传数字即可，框架会处理
             thumbSizeWidget.value = numVal;
             thumbSizeWidget.callback?.(numVal);
         }
@@ -552,6 +552,20 @@ function createBatchLoadUI(node) {
         selectedFiles.clear();
         setImageList(node, []);
         setStatus("已清空所有图片");
+    };
+
+    // ===================== 修复删除选中按钮 =====================
+    deleteSelectedBtn.onclick = () => {
+        if (selectedFiles.size === 0) {
+            setStatus("请先选中要删除的图片");
+            return;
+        }
+        const names = parseImageList(getImageListWidget(node)?.value);
+        const remaining = names.filter(n => !selectedFiles.has(n));
+        const deletedCount = selectedFiles.size;
+        selectedFiles.clear(); // 清空选中集合
+        setImageList(node, remaining);
+        setStatus(`已删除 ${deletedCount} 张图片`);
     };
 
     const redraw = () => {
