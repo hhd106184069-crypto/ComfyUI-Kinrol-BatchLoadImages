@@ -9,7 +9,7 @@ import torch
 import hashlib
 import time
 
-# ========== 批量加载节点（thumb_size 改为 STRING，避免框架强制转换报错） ==========
+# ========== 批量加载节点 ==========
 class KinrolBatchLoadImages:
     """批量加载图片节点，支持逐张入队、选择图片、追加图片、选择文件夹、清空列表等功能。"""
 
@@ -22,7 +22,6 @@ class KinrolBatchLoadImages:
                 "mode": (["batch", "single"], {"default": "batch"}),
                 "index": ("INT", {"default": 0, "min": 0, "max": 100000, "step": 1}),
                 "max_rows": ("INT", {"default": 5, "min": 1, "max": 20, "step": 1}),
-                # 关键修改：类型改为 STRING，避免框架因为空字符串报 int 转换错误
                 "thumb_size": ("STRING", {"default": "120"}),
             }
         }
@@ -32,7 +31,6 @@ class KinrolBatchLoadImages:
     RETURN_NAMES = ("images", "filenames")
     FUNCTION = "load_images"
 
-    # 辅助函数：安全转换为整数
     def _safe_int(self, value, default=120):
         try:
             return int(value)
@@ -90,7 +88,6 @@ class KinrolBatchLoadImages:
 
     @classmethod
     def IS_CHANGED(s, image_list, max_images, mode, index, max_rows, thumb_size):
-        # 安全转换
         try:
             thumb_size_int = int(thumb_size)
         except (ValueError, TypeError):
@@ -131,13 +128,14 @@ class KinrolBatchLoadImages:
 
 # ========== 文本顺序保存节点 ==========
 class KinrolSaveTextSequential:
+    """按顺序保存文本文件，用于打标；可同时保存关联图片，统一命名。"""
+
     ENCODINGS = ["UTF-8", "UTF-8-BOM", "GBK", "GB2312", "ASCII"]
 
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
-                "text": ("STRING", {"multiline": True, "default": ""}),
                 "prefix": ("STRING", {"default": "GPT"}),
                 "file_extension": ("STRING", {"default": "txt"}),
                 "encoding": (s.ENCODINGS, {"default": "UTF-8"}),
@@ -146,18 +144,22 @@ class KinrolSaveTextSequential:
                 "save_image_with_text": ("BOOLEAN", {"default": False}),
             },
             "optional": {
+                "text": ("STRING", {"multiline": True, "default": ""}),
                 "image": ("IMAGE", {"default": None}),
-                "base_filename": ("STRING", {"default": ""}),
+                "base_filename": ("STRING", {"default": "", "forceInput": True}),
+                "passthrough": ("STRING", {"multiline": False, "default": "", "forceInput": True}),
             }
         }
 
-    RETURN_TYPES = ("STRING", "IMAGE")
-    RETURN_NAMES = ("filepath", "image")
+    RETURN_TYPES = ("STRING", "IMAGE", "STRING")
+    RETURN_NAMES = ("filepath", "image", "text_out")
     FUNCTION = "save_text"
     CATEGORY = "Kinrol/Text"
     OUTPUT_NODE = True
 
-    def save_text(self, text, prefix, file_extension, encoding, subfolder, prepend_text, save_image_with_text, image=None, base_filename=""):
+    def save_text(self, prefix, file_extension, encoding, subfolder, prepend_text, save_image_with_text, text="", image=None, base_filename="", passthrough=""):
+        actual_text = passthrough if passthrough.strip() else text
+
         ext = file_extension.strip().lstrip(".")
         if not ext: ext = "txt"
 
@@ -187,7 +189,7 @@ class KinrolSaveTextSequential:
             num_str = f"{next_num:02d}" if next_num <= 99 else str(next_num)
             filename = f"{prefix}_{num_str}.{ext}"
 
-        full_text = (prepend_text or "") + text
+        full_text = (prepend_text or "") + actual_text
         filepath = output_dir / filename
         with open(filepath, "w", encoding=encoding) as f:
             f.write(full_text)
@@ -201,4 +203,4 @@ class KinrolSaveTextSequential:
             img_path = output_dir / img_filename
             pil_img.save(img_path, "PNG")
 
-        return (str(filepath.absolute()), image)
+        return (str(filepath.absolute()), image, actual_text)

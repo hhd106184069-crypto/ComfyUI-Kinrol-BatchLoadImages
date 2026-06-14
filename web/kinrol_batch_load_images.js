@@ -31,19 +31,23 @@ function ensureGlobalDragDropPrevention() {
     _globalDragDropInstalled = true;
     window.addEventListener("dragover", e => {
         if (!isFilesDragEvent(e)) return;
-        e.preventDefault();
         const hit = [..._batchLoadImagesDomUIs].find(entry => entry?.container?.contains(e.target));
-        _setDraggingUI(hit || null);
+        if (hit) {
+            e.preventDefault();
+            _setDraggingUI(hit);
+        } else {
+            _setDraggingUI(null);
+        }
     }, { capture: true });
     window.addEventListener("drop", async e => {
         if (!isFilesDragEvent(e)) return;
-        e.preventDefault();
         const hit = [..._batchLoadImagesDomUIs].find(entry => entry?.container?.contains(e.target));
         _setDraggingUI(null);
-        if (!hit) return;
-        const files = Array.from(e.dataTransfer?.files || []);
-        if (!files.length) return;
-        await uploadFilesSequential(hit.node, files, { replace: false });
+        if (hit) {
+            e.preventDefault();
+            const files = Array.from(e.dataTransfer?.files || []);
+            if (files.length) await uploadFilesSequential(hit.node, files, { replace: false });
+        }
     }, { capture: true });
     window.addEventListener("dragleave", () => _setDraggingUI(null), { capture: true });
 }
@@ -138,7 +142,6 @@ function createBatchLoadUI(node) {
     container.style.cssText = `width:100%; padding:8px; background:var(--comfy-menu-bg); border:1px solid var(--border-color); border-radius:6px; margin:5px 0; pointer-events:auto; display:flex; flex-direction:column; outline:none;`;
 
     const thumbSizeWidget = getThumbSizeWidget(node);
-    // 安全获取初始值（thumb_size 现在是字符串类型，需要转换）
     let currentThumbSize = thumbSizeWidget ? (parseInt(thumbSizeWidget.value) || 120) : 120;
 
     // 按钮布局
@@ -226,7 +229,6 @@ function createBatchLoadUI(node) {
     const syncThumbSize = (val) => {
         const numVal = parseInt(val) || 120;
         if (thumbSizeWidget) {
-            // 因为 thumb_size 在后端是 STRING，前端直接传数字即可，框架会处理
             thumbSizeWidget.value = numVal;
             thumbSizeWidget.callback?.(numVal);
         }
@@ -359,7 +361,7 @@ function createBatchLoadUI(node) {
         }
     });
 
-    // 全局粘贴拦截（支持粘贴文件，仅当焦点在插件内）
+    // 全局粘贴拦截（仅当焦点在插件内）
     const handleGlobalPaste = async (e) => {
         if (!container.contains(document.activeElement)) return;
         const items = e.clipboardData?.items;
@@ -554,7 +556,6 @@ function createBatchLoadUI(node) {
         setStatus("已清空所有图片");
     };
 
-    // ===================== 修复删除选中按钮 =====================
     deleteSelectedBtn.onclick = () => {
         if (selectedFiles.size === 0) {
             setStatus("请先选中要删除的图片");
@@ -563,7 +564,7 @@ function createBatchLoadUI(node) {
         const names = parseImageList(getImageListWidget(node)?.value);
         const remaining = names.filter(n => !selectedFiles.has(n));
         const deletedCount = selectedFiles.size;
-        selectedFiles.clear(); // 清空选中集合
+        selectedFiles.clear();
         setImageList(node, remaining);
         setStatus(`已删除 ${deletedCount} 张图片`);
     };
@@ -707,55 +708,55 @@ function createBatchLoadUI(node) {
     return { container, redraw, setDragging, setStatus };
 }
 
-// ===================== 注册扩展 =====================
+// ===================== 注册扩展（仅批量加载节点） =====================
 app.registerExtension({
     name: "Kinrol.BatchLoadImages.Extension",
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name === "KinrolBatchLoadImages") {
-            ensureGlobalDragDropPrevention();
-            const origOnNodeCreated = nodeType.prototype.onNodeCreated;
-            nodeType.prototype.onNodeCreated = function () {
-                const r = origOnNodeCreated?.apply(this, arguments);
+        if (nodeData.name !== "KinrolBatchLoadImages") return;
 
-                const thumbSizeWidget = getThumbSizeWidget(this);
-                if (thumbSizeWidget) {
-                    thumbSizeWidget.type = "hidden";
-                    thumbSizeWidget.computeSize = () => [0, -4];
-                }
+        ensureGlobalDragDropPrevention();
+        const origOnNodeCreated = nodeType.prototype.onNodeCreated;
+        nodeType.prototype.onNodeCreated = function () {
+            const r = origOnNodeCreated?.apply(this, arguments);
 
-                const imageListWidget = getImageListWidget(this);
-                if (imageListWidget) {
-                    imageListWidget.type = "hidden";
-                    imageListWidget.computeSize = () => [0, -4];
-                    const prevCallback = imageListWidget.callback;
-                    imageListWidget.callback = (value) => {
-                        prevCallback?.(value);
-                        this._kinrolBatchLoadImagesUI?.redraw();
-                    };
-                }
+            const thumbSizeWidget = getThumbSizeWidget(this);
+            if (thumbSizeWidget) {
+                thumbSizeWidget.type = "hidden";
+                thumbSizeWidget.computeSize = () => [0, -4];
+            }
 
-                const maxRowsWidget = getMaxRowsWidget(this);
-                if (maxRowsWidget) {
-                    maxRowsWidget.type = "hidden";
-                    maxRowsWidget.computeSize = () => [0, -4];
-                }
-
-                const ui = createBatchLoadUI(this);
-                this._kinrolBatchLoadImagesUI = ui;
-                this.addDOMWidget("kinrol_batch_load_images", "customwidget", ui.container);
-                this.setSize([430]);
-                _batchLoadImagesDomUIs.add({ node: this, container: ui.container, redraw: ui.redraw, setDragging: ui.setDragging });
-
-                const prevOnRemoved = this.onRemoved;
-                this.onRemoved = function () {
-                    for (const entry of _batchLoadImagesDomUIs) {
-                        if (entry?.node === this) { _batchLoadImagesDomUIs.delete(entry); break; }
-                    }
-                    prevOnRemoved?.apply(this, arguments);
+            const imageListWidget = getImageListWidget(this);
+            if (imageListWidget) {
+                imageListWidget.type = "hidden";
+                imageListWidget.computeSize = () => [0, -4];
+                const prevCallback = imageListWidget.callback;
+                imageListWidget.callback = (value) => {
+                    prevCallback?.(value);
+                    this._kinrolBatchLoadImagesUI?.redraw();
                 };
+            }
 
-                return r;
+            const maxRowsWidget = getMaxRowsWidget(this);
+            if (maxRowsWidget) {
+                maxRowsWidget.type = "hidden";
+                maxRowsWidget.computeSize = () => [0, -4];
+            }
+
+            const ui = createBatchLoadUI(this);
+            this._kinrolBatchLoadImagesUI = ui;
+            this.addDOMWidget("kinrol_batch_load_images", "customwidget", ui.container);
+            this.setSize([430]);
+            _batchLoadImagesDomUIs.add({ node: this, container: ui.container, redraw: ui.redraw, setDragging: ui.setDragging });
+
+            const prevOnRemoved = this.onRemoved;
+            this.onRemoved = function () {
+                for (const entry of _batchLoadImagesDomUIs) {
+                    if (entry?.node === this) { _batchLoadImagesDomUIs.delete(entry); break; }
+                }
+                prevOnRemoved?.apply(this, arguments);
             };
-        }
+
+            return r;
+        };
     },
 });
